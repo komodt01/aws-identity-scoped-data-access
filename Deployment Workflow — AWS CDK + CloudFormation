@@ -1,0 +1,160 @@
+# Deployment Workflow — AWS CDK + CloudFormation
+
+This document explains how deployment works for the Zero‑Trust Starter Stack using **AWS CDK (Cloud Development Kit)** and **AWS CloudFormation**. It’s formatted for GitHub Flavored Markdown (GFM).
+
+---
+
+## Overview
+
+The AWS CDK defines resources in Python and synthesizes them into a CloudFormation template, which is then deployed as a managed stack.
+
+Your deployment creates the following Zero‑Trust components:
+
+| AWS Service                       | Purpose                                                              |
+| --------------------------------- | -------------------------------------------------------------------- |
+| Cognito User Pool / Identity Pool | Authentication and token‑based identity federation                   |
+| IAM Roles & Policies              | Trust boundary via `AssumeRoleWithWebIdentity` and scoped conditions |
+| DynamoDB Table                    | Isolated per‑user data partitioning                                  |
+| AWS STS (Security Token Service)  | Temporary credentials enforcing least privilege                      |
+
+---
+
+## 1. CDK Synthesis
+
+When you run:
+
+```bash
+cdk deploy
+```
+
+CDK:
+
+1. Reads Python code from `src/app.py` and your stack files.
+2. Synthesizes a **CloudFormation template** (`.json`/`.yaml`).
+3. Prepares an execution plan for create/update/delete operations.
+
+Preview the template at any time:
+
+```bash
+cdk synth
+```
+
+Each CDK `Stack` maps 1:1 to a CloudFormation **stack**. In this project, that’s `Sec01ZeroTrustStack`.
+
+---
+
+## 2. Environment Bootstrap
+
+Before the first deployment, prepare the account/region once:
+
+```bash
+cdk bootstrap aws://248830917024/us-east-1
+```
+
+This creates a CloudFormation stack named **`CDKToolkit`** with:
+
+* An S3 bucket for assets (e.g., Lambda zips, synthesized templates)
+* IAM roles used by CDK during deployment
+* Metadata for environment linkage
+
+---
+
+## 3. CloudFormation Execution
+
+During `cdk deploy`, CDK:
+
+1. **Uploads assets** to the bootstrap S3 bucket.
+2. **Generates a CloudFormation change set** (what will change).
+3. **Prompts for approval** when IAM/security changes are present.
+4. **Submits the change set** to CloudFormation, which creates resources in dependency order.
+
+CloudFormation guarantees:
+
+* Cognito resources exist before IAM roles reference them.
+* IAM roles exist before DynamoDB policies apply.
+* Automatic **rollback** if something fails.
+
+---
+
+## 4. Stack Outputs
+
+After a successful deployment, CloudFormation exposes outputs you can reuse and document:
+
+```bash
+aws cloudformation describe-stacks --stack-name Sec01ZeroTrustStack
+```
+
+| Output Name      | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `AuthRoleArn`    | IAM role assumed by Cognito‑authenticated users |
+| `IdentityPoolId` | Cognito Identity Pool ID                        |
+| `UserPoolId`     | Cognito User Pool ID                            |
+| `TableName`      | DynamoDB table name for per‑user isolation      |
+| `StackArn`       | CloudFormation stack ARN (auditing, teardown)   |
+
+---
+
+## 5. Change Management
+
+Use CDK to preview and apply incremental changes:
+
+```bash
+cdk diff
+cdk deploy
+```
+
+* **`cdk diff`** shows the delta between local code and the deployed stack.
+* **`cdk deploy`** applies only the delta via a new change set.
+* **`cdk destroy`** removes the stack and all managed resources.
+
+CloudFormation provides:
+
+* Dependency‑aware updates
+* Drift detection
+* Event logs for each stack operation
+
+---
+
+## 6. Lifecycle Summary
+
+| Action          | Description                             |
+| --------------- | --------------------------------------- |
+| `cdk synth`     | Generate the CloudFormation template    |
+| `cdk bootstrap` | Prepare the account/region (S3 + roles) |
+| `cdk deploy`    | Build and deploy the stack              |
+| `cdk diff`      | Preview upcoming changes                |
+| `cdk destroy`   | Teardown the stack and resources        |
+
+---
+
+## Why This Matters
+
+The CDK–CloudFormation workflow gives you:
+
+* **Infrastructure as Code** repeatability across environments
+* **Rollback safety** via CloudFormation transactions
+* **Traceability** for every change (events, templates, and outputs)
+* Compliance alignment (examples):
+
+  * NIST SP 800‑53 **CM‑2**, **CM‑6**
+  * ISO 27001 **A.12.1.2**
+
+---
+
+## Teardown
+
+To avoid ongoing charges:
+
+```bash
+cdk destroy
+```
+
+CloudFormation deletes resources in the correct dependency order.
+
+---
+
+## References
+
+* AWS CDK: [https://docs.aws.amazon.com/cdk/latest/guide/home.html](https://docs.aws.amazon.com/cdk/latest/guide/home.html)
+* AWS CloudFormation: [https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html)
+* AWS Well‑Architected Framework — Security Pillar: [https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html](https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html)
