@@ -1,0 +1,14 @@
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","I","B","UP","A","ASYNC","S"]
+ignore = ["E501"]
+
+[tool.ruff.per-file-ignores]
+"scripts/**" = ["S603","S607"]
+
+[tool.bandit]
+skips = ["B101"]

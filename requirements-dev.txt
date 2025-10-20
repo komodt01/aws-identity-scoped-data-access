@@ -1,0 +1,7 @@
+bandit>=1.7.9
+black>=24.0.0
+detect-secrets>=1.5.0
+moto[boto3]>=5.0.0
+pre-commit>=3.8.0
+pytest>=8.2.0
+ruff>=0.6.0
