@@ -106,11 +106,9 @@ class IdentityScopedDataAccessStack(cdk.Stack):
                     ],
                     resources=[table.table_arn],
                     conditions={
-                        "StringEquals": {"cognito-identity.amazonaws.com:aud": identity_pool.ref},
-                        "ForAnyValue:StringLike": {
-                            "cognito-identity.amazonaws.com:amr": "authenticated"
-    },
-},
+                        "ForAllValues:StringEquals": {
+                            "dynamodb:LeadingKeys": [
+                                "${cognito-identity.amazonaws.com:sub}"
                             ]
                         }
                     },
