@@ -73,7 +73,7 @@ class IdentityScopedDataAccessStack(cdk.Stack):
             assumed_by=iam.FederatedPrincipal(
                 "cognito-identity.amazonaws.com",
                 conditions={
-                    ""StringEquals": {"cognito-identity.amazonaws.com:aud": identity_pool.ref},
+                    "StringEquals": {"cognito-identity.amazonaws.com:aud": identity_pool.ref},
                     "ForAnyValue:StringLike": {
                         "cognito-identity.amazonaws.com:amr": "authenticated"
                     },
