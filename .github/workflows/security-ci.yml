@@ -31,7 +31,6 @@ jobs:
 
       - name: Ruff lint
         run: |
-          ruff check src scripts --fix
           ruff check src scripts
 
       - name: Black formatting check
