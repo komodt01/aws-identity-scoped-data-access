@@ -1,20 +1,83 @@
+import os
+
+import boto3
 from botocore.config import Config
-# scripts/boto3/policy_simulate.py
-import boto3, os
 
-account = os.getenv("AWS_ACCOUNT_ID", "123456789012")
-role_name = os.getenv("ROLE_NAME", "wa-sec-01-cognito-auth-role")
-region = os.getenv("AWS_REGION", os.getenv("CDK_DEFAULT_REGION","us-east-1"))
-table_name = os.getenv("TABLE_NAME", "wa-sec-01-user-items")
 
-dynamodb = boto3.client("dynamodb", region_name=region)
-table_arn = f"arn:aws:dynamodb:{region}:{account}:table/{table_name}"
-
-iam = boto3.client("iam", config=Config(retries={'max_attempts':5}, connect_timeout=3, read_timeout=5, user_agent_extra='wa-sec-01') )
-resp = iam.simulate_principal_policy(
-    PolicySourceArn=f"arn:aws:iam::{account}:role/{role_name}",
-    ActionNames=["dynamodb:PutItem","dynamodb:GetItem","dynamodb:UpdateItem"],
-    ResourceArns=[table_arn],
+region = os.getenv(
+    "AWS_REGION",
+    os.getenv("CDK_DEFAULT_REGION", "us-east-1"),
 )
-for r in resp["EvaluationResults"]:
-    print(r["EvalActionName"], "=>", r["EvalDecision"])
+
+account_id = os.getenv("AWS_ACCOUNT_ID")
+
+role_name = os.getenv(
+    "ROLE_NAME",
+    "identity-scoped-access-authenticated-role",
+)
+
+table_name = os.getenv(
+    "TABLE_NAME",
+    "identity-scoped-access-user-items",
+)
+
+identity_id = os.getenv(
+    "IDENTITY_ID",
+    "us-east-1:example-identity-id",
+)
+
+if not account_id:
+    raise ValueError(
+        "AWS_ACCOUNT_ID environment variable must be set."
+    )
+
+table_arn = (
+    f"arn:aws:dynamodb:{region}:{account_id}:table/{table_name}"
+)
+
+config = Config(
+    retries={"max_attempts": 5, "mode": "standard"},
+    connect_timeout=3,
+    read_timeout=5,
+    user_agent_extra="identity-scoped-data-access",
+)
+
+iam = boto3.client(
+    "iam",
+    region_name=region,
+    config=config,
+)
+
+role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
+
+response = iam.simulate_principal_policy(
+    PolicySourceArn=role_arn,
+    ActionNames=[
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem",
+    ],
+    ResourceArns=[table_arn],
+    ContextEntries=[
+        {
+            "ContextKeyName": "dynamodb:LeadingKeys",
+            "ContextKeyValues": [identity_id],
+            "ContextKeyType": "stringList",
+        },
+        {
+            "ContextKeyName": "cognito-identity.amazonaws.com:sub",
+            "ContextKeyValues": [identity_id],
+            "ContextKeyType": "string",
+        },
+    ],
+)
+
+print(
+    f"Policy simulation for identity {identity_id}"
+)
+
+for result in response["EvaluationResults"]:
+    print(
+        f"{result['EvalActionName']} "
+        f"=> {result['EvalDecision']}"
+    )
