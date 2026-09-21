@@ -4,7 +4,7 @@ import os
 
 import aws_cdk as cdk
 
-from zero_trust_stack import IdentityScopedDataAccessStack
+from identity_scoped_data_access_stack import IdentityScopedDataAccessStack
 
 
 app = cdk.App()
