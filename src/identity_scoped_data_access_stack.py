@@ -105,8 +105,7 @@ class IdentityScopedDataAccessStack(cdk.Stack):
                     resources=[table.table_arn],
                     conditions={
                         "ForAllValues:StringEquals": {
-                            "dynamodb:LeadingKeys": [
-                                "${cognito-identity.amazonaws.com:sub}"
+                            "dynamodb:LeadingKeys": ["${cognito-identity.amazonaws.com:sub}"]
                             ]
                         }
                     },
