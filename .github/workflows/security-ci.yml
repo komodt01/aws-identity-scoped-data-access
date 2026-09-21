@@ -29,6 +29,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Install AWS CDK CLI
+        run: |
+          npm install -g aws-cdk
+
       - name: Ruff lint
         run: |
           ruff check src scripts
