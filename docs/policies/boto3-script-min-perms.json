@@ -2,30 +2,14 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "IdentityScopedDynamoDBAccess",
       "Effect": "Allow",
       "Action": [
         "dynamodb:PutItem",
-        "dynamodb:GetItem"
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem"
       ],
-      "Resource": [
-        "arn:aws:dynamodb:*:*:table/wa-sec-01-user-items"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "iam:SimulatePrincipalPolicy",
-        "iam:GetPolicyVersion",
-        "iam:GetPolicy"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "sts:GetCallerIdentity"
-      ],
-      "Resource": "*"
+      "Resource": "arn:aws:dynamodb:*:*:table/identity-scoped-access-user-items"
     }
   ]
 }
