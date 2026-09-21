@@ -18,10 +18,10 @@ destroy:
 	. .venv/bin/activate && cdk destroy
 
 ddb-demo:
-	. .venv/bin/activate && python scripts/boto3/ddb_user_demo.py
+	. .venv/bin/activate && python scripts/aws/ddb_user_demo.py
 
 simulate:
-	. .venv/bin/activate && python scripts/boto3/policy_simulate.py
+	. .venv/bin/activate && python scripts/aws/policy_simulate.py
 
 fmt:
 	. .venv/bin/activate && black src scripts
