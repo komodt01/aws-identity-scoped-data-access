@@ -1,160 +1,211 @@
-# Deployment Workflow — AWS CDK + CloudFormation
+# Deployment Workflow — Identity-Scoped Data Access
 
-This document explains how deployment works for the Zero‑Trust Starter Stack using **AWS CDK (Cloud Development Kit)** and **AWS CloudFormation**. It’s formatted for GitHub Flavored Markdown (GFM).
+## Purpose
 
----
+This document describes how the identity-scoped data access architecture is deployed using AWS CDK and AWS CloudFormation.
 
-## Overview
+The deployment creates the infrastructure required for the following security path:
 
-The AWS CDK defines resources in Python and synthesizes them into a CloudFormation template, which is then deployed as a managed stack.
+```text
+Cognito User Pool
+        |
+        v
+User Pool Client
+        |
+        v
+Cognito Identity Pool
+        |
+        v
+AWS STS temporary credentials
+        |
+        v
+Authenticated IAM Role
+        |
+        v
+Identity-Scoped DynamoDB Access
+```
 
-Your deployment creates the following Zero‑Trust components:
-
-| AWS Service                       | Purpose                                                              |
-| --------------------------------- | -------------------------------------------------------------------- |
-| Cognito User Pool / Identity Pool | Authentication and token‑based identity federation                   |
-| IAM Roles & Policies              | Trust boundary via `AssumeRoleWithWebIdentity` and scoped conditions |
-| DynamoDB Table                    | Isolated per‑user data partitioning                                  |
-| AWS STS (Security Token Service)  | Temporary credentials enforcing least privilege                      |
-
----
+The primary security objective is to enforce authorization based on the authenticated identity rather than relying solely on application logic.
 
 ## 1. CDK Synthesis
 
-When you run:
+The infrastructure is defined in Python using AWS CDK.
 
-```bash
-cdk deploy
-```
-
-CDK:
-
-1. Reads Python code from `src/app.py` and your stack files.
-2. Synthesizes a **CloudFormation template** (`.json`/`.yaml`).
-3. Prepares an execution plan for create/update/delete operations.
-
-Preview the template at any time:
+Before deployment:
 
 ```bash
 cdk synth
 ```
 
-Each CDK `Stack` maps 1:1 to a CloudFormation **stack**. In this project, that’s `Sec01ZeroTrustStack`.
+CDK converts the Python infrastructure definition into an AWS CloudFormation template.
 
----
+This provides an opportunity to inspect the resources, IAM policies, trust relationships, and other infrastructure changes before they are deployed.
 
-## 2. Environment Bootstrap
+## 2. CDK Bootstrap
 
-Before the first deployment, prepare the account/region once:
+AWS CDK requires the target AWS account and Region to be bootstrapped before the first deployment.
+
+Example:
 
 ```bash
-cdk bootstrap aws://248830917024/us-east-1
+cdk bootstrap aws://<ACCOUNT_ID>/<REGION>
 ```
 
-This creates a CloudFormation stack named **`CDKToolkit`** with:
+Do not store AWS account credentials in the repository.
 
-* An S3 bucket for assets (e.g., Lambda zips, synthesized templates)
-* IAM roles used by CDK during deployment
-* Metadata for environment linkage
+Authentication to AWS should use an approved credential mechanism such as AWS IAM Identity Center, an assumed role, or another temporary-credential workflow.
 
----
+## 3. Review Proposed Changes
 
-## 3. CloudFormation Execution
-
-During `cdk deploy`, CDK:
-
-1. **Uploads assets** to the bootstrap S3 bucket.
-2. **Generates a CloudFormation change set** (what will change).
-3. **Prompts for approval** when IAM/security changes are present.
-4. **Submits the change set** to CloudFormation, which creates resources in dependency order.
-
-CloudFormation guarantees:
-
-* Cognito resources exist before IAM roles reference them.
-* IAM roles exist before DynamoDB policies apply.
-* Automatic **rollback** if something fails.
-
----
-
-## 4. Stack Outputs
-
-After a successful deployment, CloudFormation exposes outputs you can reuse and document:
+Before modifying an existing deployment:
 
 ```bash
-aws cloudformation describe-stacks --stack-name Sec01ZeroTrustStack
+cdk diff
 ```
 
-| Output Name      | Description                                     |
-| ---------------- | ----------------------------------------------- |
-| `AuthRoleArn`    | IAM role assumed by Cognito‑authenticated users |
-| `IdentityPoolId` | Cognito Identity Pool ID                        |
-| `UserPoolId`     | Cognito User Pool ID                            |
-| `TableName`      | DynamoDB table name for per‑user isolation      |
-| `StackArn`       | CloudFormation stack ARN (auditing, teardown)   |
+This displays the difference between the locally defined architecture and the currently deployed CloudFormation stack.
 
----
+Security-sensitive changes should receive particular attention, including:
 
-## 5. Change Management
+- IAM permissions
+- IAM trust relationships
+- Cognito configuration
+- Identity Pool role mappings
+- DynamoDB authorization conditions
 
-Use CDK to preview and apply incremental changes:
+A successful deployment does not by itself prove that the resulting authorization model is correct.
+
+The security behavior must also be validated.
+
+## 4. Deployment
+
+Deploy the stack with:
 
 ```bash
+cdk deploy
+```
+
+The stack provisions:
+
+- Cognito User Pool
+- Cognito User Pool Client
+- Cognito Identity Pool
+- IAM role for authenticated identities
+- IAM trust relationship for Cognito federation
+- Identity-scoped DynamoDB permissions
+- DynamoDB table
+- CloudFormation outputs
+
+The deployed stack is:
+
+```text
+IdentityScopedDataAccessStack
+```
+
+## 5. Authentication and Authorization Flow
+
+After deployment, the intended runtime flow is:
+
+1. A user authenticates through the Cognito User Pool.
+2. The authenticated identity is associated with the Cognito Identity Pool.
+3. The Identity Pool provides a path to temporary AWS credentials.
+4. AWS STS issues temporary credentials associated with the authenticated role.
+5. IAM evaluates the requested DynamoDB operation.
+6. The DynamoDB `LeadingKeys` condition limits access according to the Cognito identity.
+7. Requests outside the permitted identity scope should be denied.
+
+This separates two security decisions:
+
+**Authentication**
+
+Determines who the user is.
+
+**Authorization**
+
+Determines which data that identity may access.
+
+## 6. Validation
+
+Infrastructure deployment should be followed by security validation.
+
+The important security assertion is not simply that DynamoDB can be accessed.
+
+The authorization boundary should demonstrate:
+
+```text
+Identity A -> Identity A data -> ALLOW
+
+Identity A -> Identity B data -> DENY
+```
+
+The repository includes supporting scripts for DynamoDB interaction and IAM policy simulation.
+
+Policy simulation provides useful authorization-policy validation, but it is not equivalent to a complete runtime test using an authenticated Cognito identity.
+
+## 7. Change Management
+
+The normal infrastructure lifecycle is:
+
+```bash
+cdk synth
 cdk diff
 cdk deploy
 ```
 
-* **`cdk diff`** shows the delta between local code and the deployed stack.
-* **`cdk deploy`** applies only the delta via a new change set.
-* **`cdk destroy`** removes the stack and all managed resources.
+Changes affecting identity or authorization deserve additional review because a syntactically valid policy can still create an unintended security exposure.
 
-CloudFormation provides:
+Examples include:
 
-* Dependency‑aware updates
-* Drift detection
-* Event logs for each stack operation
+- Expanding permitted DynamoDB actions
+- Removing identity conditions
+- Broadening the IAM trust relationship
+- Allowing unauthenticated identities
+- Changing Identity Pool role mappings
+- Changing the DynamoDB partition-key model
 
----
+These are security architecture changes, not merely infrastructure changes.
 
-## 6. Lifecycle Summary
+## 8. Teardown
 
-| Action          | Description                             |
-| --------------- | --------------------------------------- |
-| `cdk synth`     | Generate the CloudFormation template    |
-| `cdk bootstrap` | Prepare the account/region (S3 + roles) |
-| `cdk deploy`    | Build and deploy the stack              |
-| `cdk diff`      | Preview upcoming changes                |
-| `cdk destroy`   | Teardown the stack and resources        |
-
----
-
-## Why This Matters
-
-The CDK–CloudFormation workflow gives you:
-
-* **Infrastructure as Code** repeatability across environments
-* **Rollback safety** via CloudFormation transactions
-* **Traceability** for every change (events, templates, and outputs)
-* Compliance alignment (examples):
-
-  * NIST SP 800‑53 **CM‑2**, **CM‑6**
-  * ISO 27001 **A.12.1.2**
-
----
-
-## Teardown
-
-To avoid ongoing charges:
+For this demonstration environment:
 
 ```bash
 cdk destroy
 ```
 
-CloudFormation deletes resources in the correct dependency order.
+The CDK stack uses removal settings appropriate for a disposable demonstration environment.
 
----
+A production environment would require separate decisions regarding:
 
-## References
+- Data retention
+- Backup
+- Recovery
+- Deletion protection
+- Change approval
+- Environment separation
 
-* AWS CDK: [https://docs.aws.amazon.com/cdk/latest/guide/home.html](https://docs.aws.amazon.com/cdk/latest/guide/home.html)
-* AWS CloudFormation: [https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html)
-* AWS Well‑Architected Framework — Security Pillar: [https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html](https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html)
+Production data should not inherit demonstration-oriented deletion behavior without an explicit architecture decision.
+
+## Security Considerations
+
+The architecture relies on several controls working together.
+
+A failure or misconfiguration in any of the following could weaken the intended authorization boundary:
+
+- User authentication
+- User Pool configuration
+- Identity Pool federation
+- IAM role trust policy
+- IAM permissions
+- DynamoDB condition keys
+- Application handling of identity information
+
+For that reason, deployment success and security-control effectiveness should be treated as separate questions.
+
+## Key Takeaway
+
+Infrastructure as Code provides repeatability and change visibility.
+
+It does not automatically guarantee secure authorization.
+
+The security objective of this project is therefore not simply to deploy Cognito, IAM, and DynamoDB. It is to establish and validate an identity-based boundary that prevents one authenticated identity from accessing another identity's data.
