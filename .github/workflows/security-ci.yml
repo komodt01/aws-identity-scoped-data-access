@@ -35,7 +35,7 @@ jobs:
 
       - name: Black formatting check
         run: |
-          black --check --diff src scripts
+          black --check src scripts
 
       - name: Bandit security analysis
         run: |
