@@ -3,7 +3,6 @@ import os
 import boto3
 from botocore.config import Config
 
-
 region = os.getenv(
     "AWS_REGION",
     os.getenv("CDK_DEFAULT_REGION", "us-east-1"),
