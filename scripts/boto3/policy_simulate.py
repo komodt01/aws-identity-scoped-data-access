@@ -27,13 +27,9 @@ identity_id = os.getenv(
 )
 
 if not account_id:
-    raise ValueError(
-        "AWS_ACCOUNT_ID environment variable must be set."
-    )
+    raise ValueError("AWS_ACCOUNT_ID environment variable must be set.")
 
-table_arn = (
-    f"arn:aws:dynamodb:{region}:{account_id}:table/{table_name}"
-)
+table_arn = f"arn:aws:dynamodb:{region}:{account_id}:table/{table_name}"
 
 config = Config(
     retries={"max_attempts": 5, "mode": "standard"},
@@ -72,12 +68,7 @@ response = iam.simulate_principal_policy(
     ],
 )
 
-print(
-    f"Policy simulation for identity {identity_id}"
-)
+print(f"Policy simulation for identity {identity_id}")
 
 for result in response["EvaluationResults"]:
-    print(
-        f"{result['EvalActionName']} "
-        f"=> {result['EvalDecision']}"
-    )
+    print(f"{result['EvalActionName']} => {result['EvalDecision']}")
