@@ -1,556 +1,218 @@
-# Trust Boundaries — AWS Identity-Scoped Data Access
+# Trust Boundaries — Identity-Scoped Data Access
 
-## Purpose
+## The Security Question
 
-This document identifies the major trust and authorization boundaries in the AWS Identity-Scoped Data Access architecture.
+This project started with a fairly simple question:
 
-The reference implementation uses Amazon Cognito, Cognito Identity Pools, AWS STS, IAM, and DynamoDB to establish an authorization path in which an authenticated identity is intended to access only the DynamoDB data associated with that identity.
+**After a user authenticates, what prevents that user from accessing somebody else's data?**
 
-The core security objective is:
+Authentication alone does not answer that question.
 
-**Identity A → Identity A Data → ALLOW**
+The architecture uses Cognito, temporary AWS credentials, IAM, and the DynamoDB data model to carry an authenticated identity toward a data-level authorization decision.
 
-**Identity A → Identity B Data → DENY**
+The intended result is:
 
-The architecture does not treat successful authentication as sufficient authorization.
+**Identity A → A's data → ALLOW**
 
-Instead, access crosses multiple boundaries:
+**Identity A → B's data → DENY**
 
-**User → Authentication → Federation → Temporary AWS Credentials → IAM Authorization → Identity-Scoped Data**
-
-Each transition represents a separate security decision or trust relationship.
-
-The repository demonstrates the architecture and supporting policy controls, but the complete end-to-end Cognito runtime test using separate identities has not yet been implemented.
+That creates an authorization path with several places where trust changes.
 
 ---
 
-## 1. User → Cognito User Pool
+## Following the Identity
 
-The first trust boundary exists between an unauthenticated application user and the Cognito User Pool.
+### 1. From User to Authenticated Identity
 
-Before authentication succeeds, user-supplied credentials and identity claims cannot be treated as trusted proof of identity.
+The first change in trust occurs at the Cognito User Pool.
 
-### Implemented Boundary
+Before authentication, information supplied by the user cannot be treated as proof of identity. After successful authentication, Cognito provides an established application identity.
 
-The Cognito User Pool provides application-user authentication.
+That is important, but it is only the beginning of the security decision.
 
-The User Pool establishes an authenticated application identity before the architecture proceeds to AWS federation.
+A valid login means:
 
-### Security Significance
+**This identity has authenticated.**
 
-Authentication answers:
+It does not mean:
 
-**Who is the user?**
+**This identity may access every application record.**
 
-It does not answer:
-
-**Which AWS resources or application data may that user access?**
-
-Successful User Pool authentication therefore does not eliminate the authorization boundaries that follow.
+That distinction drives the rest of the architecture.
 
 ---
 
-## 2. User Pool → User Pool Client
+### 2. From Application Identity to AWS Identity
 
-The User Pool Client represents the application interaction with the Cognito User Pool.
+The Cognito Identity Pool connects the authenticated application identity to AWS.
 
-The client participates in the authentication flow but does not independently define the user's DynamoDB authorization.
+Unauthenticated identities are disabled in the implementation.
 
-### Implemented Boundary
+The Identity Pool then provides the federation path through which temporary AWS credentials can be obtained.
 
-The reference implementation creates a User Pool Client without a client secret.
+This is a separate trust decision from User Pool authentication.
 
-The User Pool and User Pool Client are configured as the identity provider used by the Cognito Identity Pool.
+The application user has crossed from:
 
-### Security Significance
+**authenticated application identity**
 
-Application authentication configuration is part of the identity trust chain.
+to:
 
-Changes to the User Pool Client or authentication configuration can affect which identities are able to enter the federation path.
+**identity capable of receiving AWS authorization**
 
-Production architecture would therefore treat identity-provider and client configuration as security-sensitive configuration.
+The authenticated IAM role reinforces that boundary by restricting its trust relationship to the expected Identity Pool and authenticated context.
 
----
-
-## 3. Authenticated Application Identity → Cognito Identity Pool
-
-Authentication to the User Pool does not directly provide AWS credentials.
-
-The authenticated application identity must cross another boundary through the Cognito Identity Pool.
-
-### Implemented Boundary
-
-The Identity Pool is configured to use the Cognito User Pool and User Pool Client as an identity provider.
-
-Unauthenticated Identity Pool access is disabled.
-
-The Identity Pool therefore provides the bridge between authenticated application identity and AWS authorization.
-
-### Security Significance
-
-This boundary separates:
-
-**Application authentication**
-
-from
-
-**AWS credential federation**
-
-An authenticated application identity does not automatically become an unrestricted AWS identity.
+Broadening that trust relationship would change who can enter the AWS authorization path.
 
 ---
 
-## 4. Cognito Identity Pool → AWS STS Temporary Credentials
+### 3. From Temporary Credentials to Permitted AWS Actions
 
-The next boundary converts authenticated identity context into temporary AWS credentials.
+Temporary credentials do not mean broad AWS access.
 
-AWS STS provides temporary credentials associated with the authenticated IAM role.
-
-### Implemented Boundary
-
-The architecture uses temporary AWS credentials rather than embedding long-lived AWS access keys in application code.
-
-### Security Significance
-
-Temporary credentials reduce persistence compared with long-lived access keys.
-
-They do not eliminate credential risk.
-
-A stolen active credential or session may still perform actions authorized to that identity until the credential expires or otherwise becomes unusable.
-
-The architecture therefore distinguishes:
-
-**Credential lifetime**
-
-from
-
-**Credential authorization**
-
-Temporary does not mean unrestricted, and temporary does not mean harmless if compromised.
-
----
-
-## 5. Cognito Federation → Authenticated IAM Role
-
-The IAM role represents a critical authorization boundary.
-
-Receiving authenticated identity context does not by itself authorize assumption of any AWS role.
-
-### Implemented Enforcement
-
-The role trust relationship requires:
-
-- The expected Cognito Identity Pool.
-- Authenticated Cognito context.
-- Role assumption through `sts:AssumeRoleWithWebIdentity`.
-
-Unauthenticated Identity Pool access is disabled.
-
-### Security Significance
-
-The trust relationship determines which federated identities may obtain the permissions associated with the role.
-
-Broadening this relationship could materially change the architecture even if the DynamoDB permission policy remained unchanged.
-
-Changes to the trust relationship should therefore be treated as security architecture changes rather than routine infrastructure modifications.
-
----
-
-## 6. Temporary AWS Credentials → IAM Authorization
-
-Possession of temporary AWS credentials does not provide unrestricted AWS access.
-
-The credentials receive the permissions associated with the authenticated IAM role.
-
-### Implemented Enforcement
-
-The role permits only:
+The authenticated role permits only:
 
 - `dynamodb:PutItem`
 - `dynamodb:GetItem`
 - `dynamodb:UpdateItem`
 
-The permissions apply only to the DynamoDB table created by the stack.
+and only against the DynamoDB table created for this project.
 
-### Security Significance
+The role therefore narrows authority before the request reaches the data itself.
 
-The authorization boundary constrains access across several dimensions:
+The progression is:
 
-**AWS Service → Specific Resource → Permitted Actions → Permitted Data**
+**Authenticated Identity → Temporary Credentials → Specific AWS Service → Specific Table → Required Operations**
 
-The role does not receive broad DynamoDB administrative permissions.
+This also limits the usefulness of the credentials compared with granting broad DynamoDB permissions.
 
-This limits the capabilities available if an authenticated credential is misused.
+Temporary credentials still need protection. If valid credentials are stolen, an attacker may be able to perform whatever actions that identity is currently authorized to perform.
+
+Short-lived credentials reduce persistence; they do not eliminate credential compromise.
 
 ---
 
-## 7. IAM Role → DynamoDB Data Partition
+## Where the Data Boundary Actually Appears
 
-This is the primary data-authorization boundary demonstrated by the architecture.
+The most important boundary in this project is inside the DynamoDB access model.
 
-An authenticated identity should not be able to access every record simply because it has permission to use DynamoDB.
+The table uses `userId` as the partition key.
 
-### Implemented Enforcement
-
-The DynamoDB table uses `userId` as its partition key.
-
-The IAM policy applies:
-
-`dynamodb:LeadingKeys`
-
-using:
+The IAM policy applies `dynamodb:LeadingKeys` using:
 
 `${cognito-identity.amazonaws.com:sub}`
 
-The intended authorization relationship is:
+The intention is to bind the AWS identity to the corresponding data partition.
 
-**Authenticated Cognito Identity → Matching DynamoDB Partition**
+That means authorization is not supposed to stop at:
 
-### Security Objective
+**Can this identity call DynamoDB?**
 
-The architecture is designed to produce:
+It continues to:
 
-**Identity A → A Data → ALLOW**
+**Which DynamoDB records may this identity operate on?**
 
-and:
-
-**Identity A → B Data → DENY**
-
-This places an authorization control close to the protected data rather than relying exclusively on application authorization logic.
-
-### Validation Boundary
-
-The policy and infrastructure supporting this architecture are implemented.
-
-However, the repository does not currently demonstrate the complete runtime test using separate authenticated Cognito identities.
-
-The architecture should therefore be described as implementing the identity-scoped authorization mechanism without claiming that end-to-end cross-identity isolation has been fully runtime validated.
+This is the core security value of the architecture.
 
 ---
 
-## 8. Trusted Identity Context → Application-Supplied Identity Values
+## Trusted Identity vs. Requested Identity
 
-One of the most important trust boundaries exists between identity information established through the trusted authentication/federation path and identifiers supplied by application users.
+There is another boundary that is easy to miss.
 
-An application request may contain an identifier such as:
+An application request can contain a value identifying the record or user being requested.
 
-`userId`
+That value came from the application side of the boundary.
 
-That value should not automatically be treated as proof of identity or ownership.
+It is not automatically proof of ownership.
 
-### Security Significance
+For example, an authenticated Identity A could attempt to request data associated with Identity B.
 
-An authenticated Identity A could attempt to request:
+Authentication has still succeeded.
 
-**userId = Identity B**
+The request should still fail.
 
-The fact that the request came from an authenticated user does not make the requested identifier trustworthy.
+The authorization design therefore depends on identity established through the Cognito and AWS federation path rather than treating a caller-supplied `userId` as proof that the caller owns that data.
 
-The architecture therefore relies on identity context established through Cognito and AWS authorization rather than trusting arbitrary application-supplied ownership claims.
-
-This distinction helps reduce authorization failures in which authentication succeeds but object ownership is not independently enforced.
+This is why the relationship between identity and the DynamoDB partition key matters as much as the authentication mechanism itself.
 
 ---
 
-## 9. Application Authorization → AWS Authorization
+## Two Enforcement Layers
 
-Application logic and AWS IAM represent separate authorization layers.
+The application still has responsibility for authorization.
 
-The application remains responsible for secure behavior.
+The AWS layer does not replace that responsibility.
 
-IAM provides an additional enforcement point.
+Instead, the design creates two opportunities to stop an invalid request:
 
-### Security Significance
-
-Application authorization could contain a defect that incorrectly requests another user's data.
-
-The IAM condition is intended to prevent that application-layer mistake from automatically becoming authorized DynamoDB access.
-
-This creates defense in depth:
-
-**Application Authorization**
-
-plus
-
-**AWS Authorization**
-
-The AWS control does not eliminate the need for secure application authorization, and application authorization should not be treated as a substitute for the AWS data-access boundary.
-
----
-
-## 10. Normal Application Identity → Administrative Authority
-
-The authenticated application role is intended for application data access.
-
-Administrative authority represents a different trust level.
-
-### Implemented Boundary
-
-The demonstrated authenticated role does not receive DynamoDB administrative permissions such as:
-
-- Table creation.
-- Table deletion.
-- Broad administrative operations.
-
-### Production Considerations
-
-A production architecture should distinguish among:
-
-- Application users.
-- Application workloads.
-- Cloud administrators.
-- Identity administrators.
-- Security administrators.
-- Data administrators.
-- Break-glass administrators.
-
-A normal application identity should not be able to modify the controls governing its own authorization.
-
----
-
-## 11. Authorization Policy → Security Administrator
-
-The IAM trust relationship, IAM permission policy, Identity Pool role mapping, and DynamoDB authorization condition determine the effective data-access boundary.
-
-These controls are therefore security-sensitive assets.
-
-### Security Significance
-
-An attacker may not need to bypass the `LeadingKeys` condition directly if they can instead modify the policy that contains it.
-
-Security-sensitive changes include:
-
-- Broadening the IAM trust relationship.
-- Enabling unauthenticated identities.
-- Removing `dynamodb:LeadingKeys`.
-- Expanding permitted DynamoDB actions.
-- Changing Identity Pool role mappings.
-- Changing the DynamoDB partition-key model.
-- Associating a broader IAM role with authenticated identities.
-
-Production architecture should govern who can make these changes and how those changes are approved, detected, and audited.
-
----
-
-## 12. Infrastructure Definition → Deployed Security Control
-
-AWS CDK defines the intended identity and authorization architecture.
-
-CDK synthesizes that definition into CloudFormation.
-
-A boundary therefore exists between:
-
-**Architecture expressed as code**
+**Application authorization**
 
 and
 
-**Security behavior of the deployed environment**
+**AWS IAM/data authorization**
 
-### Security Significance
+If application logic accidentally requests another user's partition, the IAM condition is intended to provide another enforcement point before DynamoDB permits the operation.
 
-Successful:
-
-`cdk synth`
-
-demonstrates that the infrastructure definition can be synthesized.
-
-Successful:
-
-`cdk deploy`
-
-demonstrates that AWS accepted and deployed the configuration.
-
-Neither alone proves that the runtime authorization boundary behaves correctly.
-
-Security validation must independently test the resulting behavior.
+That is the defense-in-depth objective of the project.
 
 ---
 
-## 13. Positive Access → Negative Authorization Testing
+## Who Can Change the Boundary?
 
-A successful request demonstrates only that some access is permitted.
+The authorization model depends on configuration as much as runtime authentication.
 
-It does not prove that prohibited access is denied.
+Several changes could materially alter the security boundary:
 
-### Required Security Assertion
+- Broadening the authenticated IAM role's trust relationship.
+- Enabling unauthenticated Identity Pool access.
+- Removing `dynamodb:LeadingKeys`.
+- Expanding DynamoDB permissions.
+- Changing Identity Pool role mappings.
+- Changing the partition-key strategy.
+- Trusting an application-provided identity value instead of established identity context.
 
-The meaningful authorization test is:
+Someone able to make those changes can affect the effective authorization model.
 
-**Identity A → A Data → expected ALLOW**
+In a production environment, administration of identity configuration and authorization policy would therefore require its own access controls, review, logging, and change governance.
 
-followed by:
-
-**Identity A → B Data → expected DENY**
-
-The denied request is essential evidence because the security objective is isolation, not simply successful DynamoDB connectivity.
-
-### Current Project State
-
-The repository includes:
-
-- IAM policy simulation.
-- Basic DynamoDB interaction.
-- Infrastructure validation through CDK synthesis.
-
-The complete Cognito-based A/B runtime authorization test is not currently implemented.
-
-This remains an explicit validation boundary of the project.
+The identity consuming the application should not have authority to redefine the policy protecting its own data access.
 
 ---
 
-## 14. Development Identity → Deployment Authority
+## Code Is Not the Same as Enforcement
 
-The repository defines security-sensitive infrastructure.
+The architecture is defined using AWS CDK and deployed through CloudFormation.
 
-The identity capable of modifying the repository is not necessarily the same identity that should be authorized to deploy changes into a production AWS environment.
+That gives the project repeatability and makes security-sensitive changes reviewable.
 
-### Production Considerations
+It does not prove the security behavior.
 
-Production architecture should determine:
+There are three different questions:
 
-- Who may change infrastructure definitions.
-- Who may approve security-sensitive changes.
-- Which workload or identity performs deployment.
-- Which AWS accounts and environments that deployment identity may modify.
-- Whether IAM and identity changes require additional approval.
-- How deployment activity is logged.
+**Can the infrastructure synthesize?**
 
-Source control authority and cloud administrative authority should not automatically be equivalent.
+**Can the infrastructure deploy?**
 
----
+**Does the deployed authorization boundary actually prevent cross-identity access?**
 
-## 15. Development Environment → Production Environment
+Those are not equivalent.
 
-The reference implementation uses settings appropriate for disposable demonstration infrastructure.
+The first two concern infrastructure.
 
-Production represents a different security and operational boundary.
-
-### Current Demonstration
-
-The DynamoDB table and Cognito resources use removal behavior appropriate for a disposable environment.
-
-### Production Considerations
-
-Production architecture would require explicit decisions regarding:
-
-- Environment isolation.
-- Separate AWS accounts where appropriate.
-- Data retention.
-- Backup.
-- Recovery.
-- Deletion protection.
-- Change approval.
-- Administrative access.
-- Monitoring.
-- Incident response.
-
-Demonstration-oriented lifecycle settings should not automatically cross into production.
+The third concerns security behavior.
 
 ---
 
-## Failure and Bypass Paths
+## The Test That Matters
 
-Trust-boundary analysis should consider how the authorization model could fail even when the infrastructure remains technically operational.
+The strongest validation for this architecture is not simply demonstrating that an authenticated user can read DynamoDB.
 
-### Compromised User Identity
+The meaningful test is:
 
-An attacker controlling a legitimate identity may access data authorized to that identity.
-
-Identity-scoped authorization limits cross-user access but does not protect the compromised user's own authorized data.
-
-### Stolen Temporary Credentials
-
-Temporary credentials reduce long-term persistence but may still be useful to an attacker during their active lifetime.
-
-### Overly Broad IAM Trust
-
-A broader trust relationship could allow unintended identities to obtain the authenticated role.
-
-### Unauthenticated Identity Access
-
-Enabling unauthenticated Identity Pool identities could introduce an authorization path that the current architecture intentionally disables.
-
-### Removed Identity Condition
-
-Removing `dynamodb:LeadingKeys` could allow the role to access records outside the intended identity partition.
-
-### Excessive DynamoDB Permissions
-
-Adding broad operations could weaken the data-access boundary or increase the impact of credential compromise.
-
-### Incorrect Identity-to-Data Mapping
-
-If DynamoDB records are associated with an incorrect identity value, IAM may correctly enforce a policy against an incorrect ownership model.
-
-Authorization therefore depends on both policy correctness and data-model correctness.
-
-### Application-Supplied Identity Trust
-
-If application logic treats a caller-supplied `userId` as trusted ownership information, the application could create an authorization weakness outside the intended identity path.
-
-### Identity or Federation Misconfiguration
-
-Changes to User Pool, Identity Pool, provider, role mapping, or federation configuration could alter which identity reaches the AWS authorization layer.
-
-### Authorization-Policy Drift
-
-A secure initial policy can become weaker over time through infrastructure changes.
-
-Production environments should detect and govern changes to identity and authorization controls.
-
----
-
-## Implemented vs. Production Trust Boundaries
-
-### Demonstrated by the Reference Implementation
-
-The project implements:
-
-- Cognito User Pool authentication infrastructure.
-- User Pool Client.
-- Cognito Identity Pool federation.
-- Disabled unauthenticated Identity Pool access.
-- Temporary AWS credential architecture.
-- IAM trust restricted to the expected Identity Pool and authenticated context.
-- DynamoDB permissions restricted to required data operations.
-- Permissions restricted to the specific DynamoDB table.
-- `dynamodb:LeadingKeys` identity condition.
-- DynamoDB partitioning using `userId`.
-- Identity Pool role attachment.
-- Infrastructure definition through AWS CDK.
-- IAM policy simulation support.
-- Secure-development validation.
-
-### Not Claimed as Fully Implemented or Validated
-
-The project does not claim:
-
-- Complete end-to-end Cognito A/B runtime isolation testing.
-- Enterprise MFA architecture.
-- Complete identity lifecycle management.
-- Enterprise session-management controls.
-- Centralized security monitoring.
-- Production backup and recovery.
-- Production data-retention controls.
-- Production environment isolation.
-- Enterprise privileged-administration controls.
-- Full incident-response integration.
-- Multi-region identity or data resilience.
-
-These require additional architecture and validation beyond the reference implementation.
-
----
-
-## Core Architecture Principle
-
-Identity security should not stop after authentication.
-
-The complete authorization path is:
-
-**Authenticate the User → Federate the Identity → Issue Temporary Credentials → Restrict the AWS Role → Authorize the Required Operation → Restrict the Data Scope → Validate Both Allowed and Denied Behavior**
-
-Each boundary should constrain the authority inherited from the boundary before it.
-
-The central principle is:
-
-**Authentication establishes who the identity is. Authorization determines what that identity is allowed to do, and the protected data layer should not rely solely on the application to enforce that distinction.**
+```text
+Identity A
+   |
+   +---- A data → ALLOW
+   |
+   +---- B data → DENY
